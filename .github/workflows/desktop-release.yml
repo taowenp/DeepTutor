@@ -1,0 +1,57 @@
+name: Desktop Release
+on:
+  push:
+    tags: ["v*", "desktop-v*"]
+  workflow_dispatch:
+  release:
+    types: [published]
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build-windows:
+    name: Build Windows Installers
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: 'pip' }
+      - name: Build backend venv
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/build_backend_win.ps1
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Build web (Next.js standalone)
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+          Copy-Item -Recurse -Force .next/static .next/standalone/.next/static
+          Copy-Item -Recurse -Force public .next/standalone/public
+      - name: Copy standalone into desktop resources
+        shell: pwsh
+        run: |
+          if (Test-Path desktop/resources/web) { Remove-Item -Recurse -Force desktop/resources/web }
+          Copy-Item -Recurse web/.next/standalone desktop/resources/web
+      - name: Fetch bge-small-zh-v1.5 model
+        shell: pwsh
+        env: { HF_ENDPOINT: https://hf-mirror.com }
+        run: python scripts/fetch_bge_model.py --method hf
+      - name: Desktop npm ci
+        working-directory: desktop
+        env: { ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/ }
+        run: npm ci
+      - name: electron-builder (nsis + portable)
+        working-directory: desktop
+        env: { ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/ }
+        run: npx electron-builder --win nsis portable
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with: { name: zxtutor-windows-dist, path: desktop/dist/*.exe }
